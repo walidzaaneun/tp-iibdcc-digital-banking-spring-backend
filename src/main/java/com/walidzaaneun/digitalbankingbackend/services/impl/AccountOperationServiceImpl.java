@@ -1,0 +1,91 @@
+package com.walidzaaneun.digitalbankingbackend.services.impl;
+
+import com.walidzaaneun.digitalbankingbackend.dtos.AccountHistoryDTO;
+import com.walidzaaneun.digitalbankingbackend.dtos.AccountOperationDTO;
+import com.walidzaaneun.digitalbankingbackend.entities.AccountOperation;
+import com.walidzaaneun.digitalbankingbackend.entities.BankAccount;
+import com.walidzaaneun.digitalbankingbackend.enums.OperationType;
+import com.walidzaaneun.digitalbankingbackend.exceptions.BalanceNotSufficientException;
+import com.walidzaaneun.digitalbankingbackend.exceptions.BankAccountNotFoundException;
+import com.walidzaaneun.digitalbankingbackend.mappers.BankAccountMapperImpl;
+import com.walidzaaneun.digitalbankingbackend.repositories.AccountOperationRepository;
+import com.walidzaaneun.digitalbankingbackend.repositories.BankAccountRepository;
+import com.walidzaaneun.digitalbankingbackend.services.AccountOperationService;
+import jakarta.transaction.Transactional;
+import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.stereotype.Service;
+
+import java.util.Date;
+import java.util.List;
+import java.util.stream.Collectors;
+
+@Service @Transactional @AllArgsConstructor @Slf4j
+public class AccountOperationServiceImpl implements AccountOperationService {
+    private BankAccountMapperImpl dtoMapper;
+    private AccountOperationRepository accountOperationRepository;
+    private BankAccountRepository bankAccountRepository;
+
+    @Override
+    public void debit(String accountId, double amount, String description) throws BankAccountNotFoundException, BalanceNotSufficientException {
+        BankAccount bankAccount=bankAccountRepository.findById(accountId)
+                .orElseThrow(()->new BankAccountNotFoundException("BankAccount not found"));
+        if(bankAccount.getBalance()<amount)
+            throw new BalanceNotSufficientException("Balance not sufficient");
+        AccountOperation accountOperation=new AccountOperation();
+        accountOperation.setType(OperationType.DEBIT);
+        accountOperation.setAmount(amount);
+        accountOperation.setDescription(description);
+        accountOperation.setOperationDate(new Date());
+        accountOperation.setBankAccount(bankAccount);
+        accountOperationRepository.save(accountOperation);
+        bankAccount.setBalance(bankAccount.getBalance()-amount);
+        bankAccountRepository.save(bankAccount);
+    }
+
+
+    @Override
+    public void credit(String accountId, double amount, String description) throws BankAccountNotFoundException {
+        BankAccount bankAccount=bankAccountRepository.findById(accountId)
+                .orElseThrow(()->new BankAccountNotFoundException("BankAccount not found"));
+        AccountOperation accountOperation=new AccountOperation();
+        accountOperation.setType(OperationType.CREDIT);
+        accountOperation.setAmount(amount);
+        accountOperation.setDescription(description);
+        accountOperation.setOperationDate(new Date());
+        accountOperation.setBankAccount(bankAccount);
+        accountOperationRepository.save(accountOperation);
+        bankAccount.setBalance(bankAccount.getBalance()+amount);
+        bankAccountRepository.save(bankAccount);
+    }
+
+    @Override
+    public void transfer(String accountIdSource, String accountIdDestination, double amount) throws BankAccountNotFoundException, BalanceNotSufficientException {
+        debit(accountIdSource,amount,"Transfer to "+accountIdDestination);
+        credit(accountIdDestination,amount,"Transfer from "+accountIdSource);
+    }
+
+    @Override
+    public List<AccountOperationDTO> accountHistory(String accountId){
+        List<AccountOperation> accountOperations = accountOperationRepository.findByBankAccountId(accountId);
+        return accountOperations.stream().map(op->dtoMapper.fromAccountOperation(op)).collect(Collectors.toList());
+    }
+
+    @Override
+    public AccountHistoryDTO getAccountHistory(String accountId, int page, int size) throws BankAccountNotFoundException {
+        BankAccount bankAccount=bankAccountRepository.findById(accountId).orElse(null);
+        if(bankAccount==null) throw new BankAccountNotFoundException("Account not Found");
+        Page<AccountOperation> accountOperations = accountOperationRepository.findByBankAccountIdOrderByOperationDateDesc(accountId, PageRequest.of(page, size));
+        AccountHistoryDTO accountHistoryDTO=new AccountHistoryDTO();
+        List<AccountOperationDTO> accountOperationDTOS = accountOperations.getContent().stream().map(op -> dtoMapper.fromAccountOperation(op)).collect(Collectors.toList());
+        accountHistoryDTO.setAccountOperationDTOS(accountOperationDTOS);
+        accountHistoryDTO.setAccountId(bankAccount.getId());
+        accountHistoryDTO.setBalance(bankAccount.getBalance());
+        accountHistoryDTO.setCurrentPage(page);
+        accountHistoryDTO.setPageSize(size);
+        accountHistoryDTO.setTotalPages(accountOperations.getTotalPages());
+        return accountHistoryDTO;
+    }
+}
